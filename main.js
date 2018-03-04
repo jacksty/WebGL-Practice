@@ -214,6 +214,7 @@ const fsSource = `
         }
         else {
             texColor = vec3(1.0,1.0,1.0) - dieColor;
+            texColor = step(0.5, texColor);
         }
         gl_FragColor = vec4(texColor, 1.0);
     }
