@@ -58,12 +58,19 @@ function init(mesh) {
         attribLocations: {
             vertexPosition: gl.getAttribLocation(main.program, 'aVertexPosition'),
             textureCoordinate: gl.getAttribLocation(main.program, 'aTexCoordinate'),
+            vertexNormal: gl.getAttribLocation(main.program, 'aVertexNormal'),
         },
         uniformLocations: {
             projectionMatrix: gl.getUniformLocation(main.program, 'uProjectionMatrix'),
             modelViewMatrix: gl.getUniformLocation(main.program, 'uModelViewMatrix'),
             texture: gl.getUniformLocation(main.program, 'texture'),
             dieColor: gl.getUniformLocation(main.program, 'dieColor'),
+            normalMatrix: gl.getUniformLocation(main.program, 'uNormalMatrix'),
+            cameraPosition: gl.getUniformLocation(main.program, 'cameraPosition'),
+            lightPosition: gl.getUniformLocation(main.program, 'lightPosition'),
+            lightColor: gl.getUniformLocation(main.program, 'lightColor'),
+            ambientColor: gl.getUniformLocation(main.program, 'ambientColor'),
+            shininess: gl.getUniformLocation(main.program, 'shininess'),
         },
     };
 
@@ -78,6 +85,10 @@ function init(mesh) {
     main.texBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, main.texBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(die.textures), gl.STATIC_DRAW);
+
+    main.normalBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, main.normalBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(die.vertexNormals), gl.STATIC_DRAW);
 
     main.vertexLength = die.vertices.length;
     main.indexLength = die.indices.length;
@@ -131,6 +142,10 @@ function draw(now) {
     mat4.rotate(modelViewMatrix, modelViewMatrix, main.rotation, [1,0,0]);
     mat4.rotate(modelViewMatrix, modelViewMatrix, main.rotation, [0,1,0]);
 
+    const normalMatrix = mat4.create();
+    mat4.invert(normalMatrix, modelViewMatrix);
+    mat4.transpose(normalMatrix, normalMatrix);
+
     gl.bindBuffer(gl.ARRAY_BUFFER, main.vertexBuffer);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, main.indexBuffer);
 
@@ -155,6 +170,17 @@ function draw(now) {
     );
     gl.enableVertexAttribArray(main.programInfo.attribLocations.textureCoordinate);
 
+    gl.bindBuffer(gl.ARRAY_BUFFER, main.normalBuffer);
+    gl.vertexAttribPointer(
+        main.programInfo.attribLocations.vertexNormal,
+        3,
+        gl.FLOAT,
+        false,
+        0,
+        0
+    );
+    gl.enableVertexAttribArray(main.programInfo.attribLocations.vertexNormal);
+
     gl.useProgram(main.program);
     gl.uniformMatrix4fv(
         main.programInfo.uniformLocations.projectionMatrix,
@@ -166,6 +192,11 @@ function draw(now) {
         false,
         modelViewMatrix
     );
+    gl.uniformMatrix4fv(
+        main.programInfo.uniformLocations.normalMatrix,
+        false,
+        normalMatrix
+    );
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, main.texture);
     gl.uniform1i(main.programInfo.uniformLocations.texture, 0);
@@ -176,6 +207,11 @@ function draw(now) {
     const blue = parseInt(colorString.slice(4, 6), 16);
     
     gl.uniform3f(main.programInfo.uniformLocations.dieColor, red / 255, green / 255, blue / 255);
+    gl.uniform3f(main.programInfo.uniformLocations.cameraPosition, 0, 0, 0);
+    gl.uniform3f(main.programInfo.uniformLocations.lightPosition, 0, 5, 0);
+    gl.uniform3f(main.programInfo.uniformLocations.ambientColor, 0.2, 0.2, 0.2);
+    gl.uniform3f(main.programInfo.uniformLocations.lightColor, 0.7, 0.7, 0.7);
+    gl.uniform1f(main.programInfo.uniformLocations.shininess, 32.0);
 
     gl.drawElements(gl.TRIANGLES, main.indexLength, gl.UNSIGNED_SHORT, 0);
     requestAnimationFrame(draw);
@@ -187,13 +223,19 @@ const vsSource = `
 
     attribute vec3 aVertexPosition;
     attribute vec2 aTexCoordinate;
+    attribute vec3 aVertexNormal;
 
     uniform mat4 uModelViewMatrix;
     uniform mat4 uProjectionMatrix;
+    uniform mat4 uNormalMatrix;
 
     varying vec2 texcoord;
+    varying vec3 normal;
+    varying vec3 position;
 
     void main() {
+        position = (uModelViewMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        normal = (uNormalMatrix * vec4(aVertexNormal, 0.0)).xyz;
         texcoord = vec2(aTexCoordinate.x, 1.0 - aTexCoordinate.y);
         gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aVertexPosition.xyz, 1.0);
     }
@@ -204,8 +246,15 @@ const fsSource = `
 
     uniform sampler2D texture;
     uniform vec3 dieColor;
+    uniform vec3 cameraPosition;
+    uniform vec3 lightPosition;
+    uniform vec3 lightColor;
+    uniform vec3 ambientColor;
+    uniform float shininess;
 
     varying vec2 texcoord;
+    varying vec3 normal;
+    varying vec3 position;
 
     void main() {
         vec3 texColor = texture2D(texture, texcoord).rgb;
@@ -216,6 +265,16 @@ const fsSource = `
             texColor = vec3(1.0,1.0,1.0) - dieColor;
             texColor = step(0.5, texColor);
         }
-        gl_FragColor = vec4(texColor, 1.0);
+
+        vec3 L = normalize(lightPosition - position);
+        vec3 V = normalize(cameraPosition - position);
+        vec3 N = normalize(normal);
+        vec3 R = 2.0 * dot(L, N) * N - L;
+
+        vec3 ambient = ambientColor * texColor;
+        vec3 diffuse = lightColor * texColor * max(dot(L, N), 0.0);
+        vec3 specular = lightColor * pow(max(dot(R, V), 0.0), shininess) * texColor;
+
+        gl_FragColor = vec4(ambient + diffuse + specular, 1.0);
     }
 `;
